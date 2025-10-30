@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SF Ripe Fruit Finder</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        #header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        #info {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        #controls {
+            padding: 15px 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .filter-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        label {
+            font-weight: 500;
+            font-size: 14px;
+        }
+        select, button {
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        #map {
+            height: calc(100vh - 140px);
+            width: 100%;
+        }
+        .legend {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 5px 0;
+            font-size: 13px;
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        .ripe { background: #10b981; }
+        .not-ripe { background: #ef4444; }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            z-index: 9999;
+        }
+        #loading.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>🍊 San Francisco Ripe Fruit Finder</h1>
+        <div id="info">Find fruit-bearing street trees and check their ripeness status</div>
+    </div>
+    
+    <div id="controls">
+        <div class="filter-group">
+            <label for="fruit-filter">Filter by Fruit:</label>
+            <select id="fruit-filter">
+                <option value="all">All Fruits</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="ripeness-filter">Ripeness:</label>
+            <select id="ripeness-filter">
+                <option value="all">All Trees</option>
+                <option value="ripe">Ripe Now</option>
+                <option value="not-ripe">Not Ripe</option>
+            </select>
+        </div>
+        <button onclick="loadTrees()">Refresh Data</button>
+        <div id="count" style="margin-left: auto; font-weight: 500;"></div>
+    </div>
+    
+    <div id="loading">Loading fruit trees...</div>
+    <div id="map"></div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        let map;
+        let markers = [];
+        let allTrees = [];
+        
+        function initMap() {
+            map = L.map('map').setView([37.7749, -122.4194], 12);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+            
+            const legend = L.control({position: 'bottomright'});
+            legend.onAdd = function() {
+                const div = L.DomUtil.create('div', 'legend');
+                div.innerHTML = `
+                    <div class="legend-item">
+                        <div class="legend-color ripe"></div>
+                        <span>Ripe Now</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color not-ripe"></div>
+                        <span>Not in Season</span>
+                    </div>
+                `;
+                return div;
+            };
+            legend.addTo(map);
+        }
+        
+        function loadTrees() {
+            document.getElementById('loading').classList.remove('hidden');
+            
+            fetch('/api/fruit-trees')
+                .then(response => response.json())
+                .then(data => {
+                    allTrees = data.trees;
+                    updateFruitFilter();
+                    filterAndDisplay();
+                    document.getElementById('loading').classList.add('hidden');
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Failed to load tree data');
+                    document.getElementById('loading').classList.add('hidden');
+                });
+        }
+        
+        function updateFruitFilter() {
+            const fruitTypes = [...new Set(allTrees.map(t => t.fruit_type))].sort();
+            const select = document.getElementById('fruit-filter');
+            select.innerHTML = '<option value="all">All Fruits</option>';
+            fruitTypes.forEach(fruit => {
+                const option = document.createElement('option');
+                option.value = fruit;
+                option.textContent = fruit.charAt(0).toUpperCase() + fruit.slice(1);
+                select.appendChild(option);
+            });
+        }
+        
+        function filterAndDisplay() {
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+            
+            const fruitFilter = document.getElementById('fruit-filter').value;
+            const ripenessFilter = document.getElementById('ripeness-filter').value;
+            
+            const filtered = allTrees.filter(tree => {
+                const fruitMatch = fruitFilter === 'all' || tree.fruit_type === fruitFilter;
+                const ripenessMatch = ripenessFilter === 'all' || 
+                    (ripenessFilter === 'ripe' && tree.is_ripe) ||
+                    (ripenessFilter === 'not-ripe' && !tree.is_ripe);
+                return fruitMatch && ripenessMatch;
+            });
+            
+            filtered.forEach(tree => {
+                const color = tree.is_ripe ? '#10b981' : '#ef4444';
+                const icon = L.divIcon({
+                    html: `<div style="background: ${color}; width: 14px; height: 14px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+                    className: '',
+                    iconSize: [14, 14]
+                });
+                
+                const marker = L.marker([tree.latitude, tree.longitude], { icon })
+                    .bindPopup(`
+                        <strong>${tree.species}</strong><br>
+                        <em>${tree.fruit_type}</em><br>
+                        ${tree.is_ripe ? '✅ <strong>Ripe Now!</strong>' : '❌ Not in season'}<br>
+                        📍 ${tree.address}
+                    `)
+                    .addTo(map);
+                
+                markers.push(marker);
+            });
+            
+            document.getElementById('count').textContent = 
+                `Showing ${filtered.length} of ${allTrees.length} trees`;
+        }
+        
+        document.getElementById('fruit-filter').addEventListener('change', filterAndDisplay);
+        document.getElementById('ripeness-filter').addEventListener('change', filterAndDisplay);
+        
+        initMap();
+        loadTrees();
+    </script>
+</body>
+</html>
